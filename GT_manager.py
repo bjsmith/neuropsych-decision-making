@@ -174,6 +174,10 @@ class GT_manager(object):
         player.pvlv_mode=p_pvlv_mode
         return player
     def optimize_parameters(self):
+        
+        #for use in displaying parameters.
+        param_str= lambda param: (str(round(param,2)) if (type(param)==type(0.0)) else str(param))
+        
         #set parameters
         self.supervisor=GT_supervisor()
         player = GT_player()
@@ -250,11 +254,13 @@ class GT_manager(object):
             #test the new player
             new_player_result=self.run_bootstrap_get_match_score(new_player,100)
             np_params=new_player.get_parameter_dictionary()
+
+            
             
             print (str(player_result) + " to beat; " + "Player " + str(n) + " had a match score of " + str(new_player_result) + ".")
             if(new_player_result>player_result*1.01):
                 print ("Changes:"
-                + ','.join([k + "(" + str(player_params[k])+"->"+str(np_params[k])+")" for k in keys_to_modify]))
+                + ','.join([k + "(" + param_str(player_params[k])+"->"+param_str(np_params[k])+")" for k in keys_to_modify]))
                 player=new_player
                 player_result=new_player_result
                 

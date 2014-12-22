@@ -1,5 +1,6 @@
 import numpy
-import random
+import scipy as sp
+from scipy import stats
 # -*- coding: utf-8 -*-
 """
 Created on Wed Dec  3 23:34:55 2014
@@ -7,6 +8,8 @@ Copyright (C) 2014 Ben J. Smith
 This file and the related project is distributed under the terms of the GNU General Public License v3.0 available in the accompanying license file.
 By using this work your agree to the terms of the license.
 @author: ben
+
+Introduced this version: a parameter to change the capacity of cards remembered
 """
 verbosity=0
 
@@ -30,13 +33,15 @@ class GT_player(object):
     habit_strength=0.5
     pvlv_weight=0.2
     pvlv_mode=PVLV_MODE_EXPECTANCY
+    wm_capacity=2
     
         
     #state variables
     game_in_play=False
     
-    dlPFC_working_memory_last_card=""
-    dlPFC_working_memory_last_card_val=0
+    
+    dlPFC_wm_previous_cards=[]
+    dlPFC_wm_previous_cards_val=[]
     
     #http://www.toptal.com/python/python-class-attributes-an-overly-thorough-guide#Handling-assignment
     pvlv_val=None
@@ -82,6 +87,20 @@ class GT_player(object):
         if 'pvlv_mode'==key:
             self.pvlv_mode=value
     
+    def working_memory_update(self,last_deck,net_gain):
+        self.dlPFC_wm_previous_cards.append(last_deck)
+        self.dlPFC_wm_previous_cards_val.append(net_gain)
+        assert(len(self.dlPFC_wm_previous_cards)==len(self.dlPFC_wm_previous_cards_val))
+        #if the list is larger than the memory capacity, it's removed.
+        if len(self.dlPFC_wm_previous_cards)>self.wm_capacity:
+            del self.dlPFC_wm_previous_cards[0]
+            del self.dlPFC_wm_previous_cards_val[0]
+            
+        #make sure we're not remembering more items than is possible with the given capacity; otherwise there's a problem with the model.
+        assert (len(self.dlPFC_wm_previous_cards)<=self.wm_capacity)
+        
+        if self.verbosity>3: print self.dlPFC_wm_previous_cards
+    
     def pvlv_learn(self,chosen_deck,val):
         #global verbosity
         if self.verbosity>5:print("learning; PVLV learning mode is " + self.pvlv_mode)
@@ -95,7 +114,7 @@ class GT_player(object):
                 print self.pvlv_val
         elif self.pvlv_mode==self.PVLV_MODE_PROSPECT:
             printv(5,"using prospect: " + str(discrepancy))
-            self.pvlv_val[chosen_deck]=self.pvlv_val[chosen_deck]+self.pvlv_weight*pow(abs(discrepancy),0.5)*sign(discrepancy)
+            self.pvlv_val[chosen_deck]=self.pvlv_val[chosen_deck]+self.pvlv_weight*pow(abs(discrepancy),0.5)*numpy.sign(discrepancy)
     
     def reset_state(self):
         #return all state variables to their initialized states.
@@ -112,11 +131,21 @@ class GT_player(object):
         
     def reset_working_memory(self):
         #global verbosity
-        self.dlPFC_working_memory_last_card=""
-        self.dlPFC_working_memory_last_card_val=0
+        self.dlPFC_wm_previous_cards= []
+        self.dlPFC_wm_previous_cards_val=[]
         if self.verbosity>0:print "Reset working memory"
     
-        
+    def reflective_val_for_stimulus(self,stimulus):
+        if stimulus in self.dlPFC_wm_previous_cards:
+            #we remember the value here
+            #return the MOST RECENT value recorded for this deck.
+            val_index=len(self.dlPFC_wm_previous_cards) - 1 - self.dlPFC_wm_previous_cards[::-1].index(stimulus)
+            return self.reflective_u(
+                self.dlPFC_wm_previous_cards_val[val_index]
+                )
+        else:
+            return None
+
     def reflective_u(self,prev_val):
         return self.working_memory_confidence*prev_val
     def impulsive_u(self,prev_val):
@@ -124,7 +153,7 @@ class GT_player(object):
         
     def get_pvlv_signal(self,deck):
         return self.pvlv_val[deck]
-        
+    
     def choose_deck(self,decks):
         #global verbosity
         #decks=self.decks
@@ -148,12 +177,10 @@ class GT_player(object):
             for d in range(0,deck_count):#for each deck.
                 #affect arising from working memory
                 if (self.vmPFC_intact):
-                    if self.dlPFC_working_memory_last_card==d:#if this is the last deck we picked
-                        #and if was good rather than bad!
-                        wm_val=self.reflective_u(self.dlPFC_working_memory_last_card_val)
-                        wm_vals[d]=wm_vals[d]+wm_val
-
-                        accumulator[d]+=wm_val
+                    rv=self.reflective_val_for_stimulus(d)
+                    if(rv!=None):
+                        accumulator[d]+=rv
+                        #accumulator[d]+=wm_val
                         
                 #otherwise...what is the PVLV system telling us about this deck?
                 accumulator[d]+=(accumulator[d]+
@@ -184,9 +211,7 @@ class GT_player(object):
     
     #subject observes choice result and learns from it.
     def observe_choice_result(self,net_gain,chosen_deck):
-        self.dlPFC_working_memory_last_card=chosen_deck
-        self.dlPFC_working_memory_last_card_val=net_gain
-            
+        self.working_memory_update(chosen_deck,net_gain)
         self.pvlv_learn(chosen_deck,net_gain)
 
 
@@ -232,7 +257,7 @@ class GT_supervisor(object):
         
     def run_block_set(self,deck_set_to_use=None,player_to_use=None):
         #global verbosity
-        #global value_in_hand, vmPFC_intact,dlPFC_working_memory_last_card,dlPFC_working_memory_last_card_val,verbosity, pvlv_val,deck_set_current,trial_num
+        #global value_in_hand, vmPFC_intact,dlPFC_wm_previous_cards,dlPFC_wm_previous_cards_val,verbosity, pvlv_val,deck_set_current,trial_num
         
         self.deck_set_current=deck_set_to_use
         #trial_num=self.get_trial_num()
@@ -287,17 +312,18 @@ class GT_supervisor(object):
     def execute_round(self):
         #global verbosity
         #print "beginning round"
-        #global value_in_hand, dlPFC_working_memory_last_card, dlPFC_working_memory_last_card_val,deck_set_current
+        #global value_in_hand, dlPFC_wm_previous_cards, dlPFC_wm_previous_cards_val,deck_set_current
         #working memory tends to fade after each round.
         trial_num=self.get_trial_num()
         round_deck_order=range(0,trial_num)
-        random.shuffle(round_deck_order)
+        numpy.random.shuffle(round_deck_order)
         round_deck_tally=[0,0,0,0]
         
         for t in round_deck_order:
             if self.verbosity>2:print "Running trial " + str(t+1) + " of " + str(trial_num)
             chosen_deck=self.player.choose_deck(self.decks)
             if self.verbosity>2:print "Chosen Deck " + self.decks[chosen_deck]
+            if self.verbosity>5:print "wm value contents are: " + self.player.dlPFC_wm_previous_cards_val
             #player has chosen a deck, now we find out what we get for it for this trial
             val=self.deck_set_current[self.decks[chosen_deck]][t]
             
